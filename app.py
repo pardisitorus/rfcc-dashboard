@@ -8,46 +8,9 @@ import shapely.geometry
 import ee
 import altair as alt
 from datetime import datetime, timedelta
-import gdown
-from google.oauth2.credentials import Credentials
 
 # ==============================================================================
-# 1. AUTENTIKASI GOOGLE EARTH ENGINE
-# ==============================================================================
-def init_gee():
-    """Inisialisasi Google Earth Engine dengan OAuth2"""
-    try:
-        # Ambil token dari Streamlit Secrets
-        refresh_token = st.secrets["GEE_REFRESH_TOKEN"]
-        
-        # Client ID & Secret Default GEE Python
-        DEFAULT_CLIENT_ID = "517222506229-vsmmajv00ul0bs7p89v5m89qs8eb9359.apps.googleusercontent.com"
-        DEFAULT_CLIENT_SECRET = "RJJ9E_Z7f-ixv3TPxW2KuR5P"
-        
-        # Buat kredensial OAuth2
-        creds = Credentials(
-            None,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=DEFAULT_CLIENT_ID,
-            client_secret=DEFAULT_CLIENT_SECRET
-        )
-        
-        # Inisialisasi Earth Engine
-        ee.Initialize(credentials=creds)
-        
-        return True
-        
-    except Exception as e:
-        st.error(f"❌ Gagal menghubungkan ke Google Earth Engine: {e}")
-        st.info("💡 Pastikan GEE_REFRESH_TOKEN sudah diset di Streamlit Secrets")
-        return False
-
-# Panggil fungsi inisialisasi di awal
-GEE_STATUS = init_gee()
-
-# ==============================================================================
-# 2. KONFIGURASI HALAMAN
+# 1. KONFIGURASI SISTEM
 # ==============================================================================
 st.set_page_config(
     layout="wide", 
@@ -56,51 +19,65 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ==============================================================================
-# 3. CUSTOM CSS STYLING
-# ==============================================================================
+# Style UI: Gelap, Elegan, Garis Tegas
 st.markdown("""
 <style>
-    .stApp { 
-        background-color: #0E1117; 
-        color: #E0E0E0; 
-        font-family: 'Inter', sans-serif; 
-    }
+    .stApp { background-color: #0E1117; color: #E0E0E0; font-family: 'Inter', sans-serif; }
     
     /* KPI Cards */
     div[data-testid="stMetric"] {
-        background-color: #1A1C24; 
-        border: 1px solid #333; 
-        padding: 15px;
-        border-radius: 8px; 
-        border-left: 5px solid #FF4B2B;
+        background-color: #1A1C24; border: 1px solid #333; padding: 15px;
+        border-radius: 8px; border-left: 5px solid #FF4B2B;
     }
     
     /* Header */
     h1 {
         background: linear-gradient(to right, #FF4B2B, #FF416C);
-        -webkit-background-clip: text; 
-        -webkit-text-fill-color: transparent;
-        font-weight: 800; 
-        font-size: 2.8rem; 
-        margin-bottom: 0; 
-        padding-bottom: 10px;
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-weight: 800; font-size: 2.8rem; margin-bottom: 0; padding-bottom: 10px;
     }
     
-    /* Expander */
+    /* Expander Rekomendasi */
     .streamlit-expanderHeader {
-        font-weight: bold; 
-        background-color: #262730; 
-        border-radius: 5px;
+        font-weight: bold; background-color: #262730; border-radius: 5px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 4. FUNGSI LOAD DATA DESA
+# 2. LOAD DATA LOKAL
 # ==============================================================================
+# GANTI PATH SESUAI LOKASI ANDA
 DATA_URL = "https://drive.google.com/uc?id=1jmBB6Dv36aRnbDkj-cuZ154M0E3tzhOQ"
 LOCAL_FILE = "desa1_riau.csv"
+
+
+
+@st.cache_resource
+def init_ee():
+    """Koneksi Hybrid: Mencoba Secrets (Cloud) lalu Local (Laptop)"""
+    # 1. Coba Mode Cloud (Secrets) - Untuk Deployment Online
+    try:
+        if "EARTHENGINE_TOKEN" in st.secrets:
+            import json
+            from google.oauth2.service_account import Credentials
+            service_account_info = json.loads(st.secrets["EARTHENGINE_TOKEN"])
+            credentials = Credentials.from_service_account_info(service_account_info)
+            ee.Initialize(credentials=credentials)
+            return True
+    except: 
+        pass
+
+    # 2. Coba Mode Local (Laptop)
+    try:
+        # Gunakan Project ID 'website-kp' sesuai dashboard Anda
+        ee.Initialize(project='website-kp')
+        return True
+    except Exception as e:
+        st.sidebar.error(f"Gagal Login GEE: {e}")
+        st.sidebar.warning("Koneksi GEE Gagal. Pastikan sudah login di terminal.")
+        return False
+
 
 @st.cache_data
 def load_data():
@@ -147,21 +124,16 @@ def load_data():
         st.error(f"❌ Gagal load layer desa: {e}")
         return None
 
+
 # ==============================================================================
-# 5. FUNGSI AMBIL DATA SATELIT DENGAN RETRY OTOMATIS
+# 3. ENGINE SATELIT - DATA REAL DENGAN AUTO MUNDUR SAMPAI KETEMU
 # ==============================================================================
 def get_satellite_data_robust(df):
-    """Ambil data LST, NDVI, dan CHIRPS dengan retry otomatis jika data tidak tersedia"""
-    
     status = st.empty()
-    status.info("📡 MENGHUBUNGI SATELIT... MENARIK DATA METEOROLOGI TERBARU...")
-    
-    if not GEE_STATUS:
-        status.error("❌ Google Earth Engine tidak terhubung. Tidak dapat mengambil data satelit.")
-        st.stop()
+    status.info("📡 MENGHUBUNGI SATELIT... MENARIK DATA METEROLOGI TERBARU...")
     
     try:
-        # Buat Feature Collection dari centroid desa
+        # Buat Feature Collection dari titik centroid desa
         features = []
         for i, row in df.iterrows():
             f = ee.Feature(ee.Geometry.Point([row['lon'], row['lat']]), {'idx': i})
@@ -171,19 +143,22 @@ def get_satellite_data_robust(df):
         now = datetime.now()
         
         # ========== 1. SUHU (LST) - MODIS Terra MOD11A1 ==========
+        # Update: Harian, tapi kadang ada gap karena awan
+        # Strategi: Ambil data 8 hari terakhir (composite)
         lst_data = None
         lst_date = None
         
-        for days_back in range(0, 30):
+        for days_back in range(0, 30):  # Coba mundur sampai 30 hari
             try:
                 search_date = now - timedelta(days=days_back)
-                start = search_date - timedelta(days=8)
+                start = search_date - timedelta(days=8)  # Window 8 hari
                 end = search_date
                 
                 lst_collection = ee.ImageCollection('MODIS/061/MOD11A1') \
                     .filterDate(start, end) \
                     .select('LST_Day_1km')
                 
+                # Cek apakah ada data
                 count = lst_collection.size().getInfo()
                 if count > 0:
                     lst_data = lst_collection.mean().rename('LST_RAW')
@@ -197,10 +172,12 @@ def get_satellite_data_robust(df):
             raise Exception("LST data tidak ditemukan dalam 30 hari terakhir")
 
         # ========== 2. VEGETASI (NDVI) - MODIS MOD13Q1 ==========
+        # Update: 16 hari sekali
+        # Strategi: Ambil data terbaru dalam 32 hari terakhir
         ndvi_data = None
         ndvi_date = None
         
-        for days_back in range(0, 60):
+        for days_back in range(0, 60):  # Coba mundur sampai 60 hari
             try:
                 search_date = now - timedelta(days=days_back)
                 start = search_date - timedelta(days=16)
@@ -223,13 +200,15 @@ def get_satellite_data_robust(df):
             raise Exception("NDVI data tidak ditemukan dalam 60 hari terakhir")
 
         # ========== 3. HUJAN (CHIRPS) - Daily Precipitation ==========
+        # Update: Harian (biasanya delay 2-3 hari)
+        # Strategi: Ambil total 30 hari dari data terbaru yang ada
         rain_data = None
         rain_date = None
         
-        for days_back in range(0, 15):
+        for days_back in range(0, 15):  # CHIRPS biasanya delay 2-7 hari
             try:
                 search_end = now - timedelta(days=days_back)
-                search_start = search_end - timedelta(days=30)
+                search_start = search_end - timedelta(days=30)  # Total 30 hari
                 
                 rain_collection = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY') \
                     .filterDate(search_start, search_end) \
@@ -262,22 +241,23 @@ def get_satellite_data_robust(df):
         for f in data['features']:
             p = f['properties']
             
-            # Konversi LST: Kelvin -> Celcius
+            # Konversi Unit LST: Kelvin -> Celcius
             l_val = p.get('LST_RAW')
             if l_val and l_val > 0 and l_val != -9999:
                 lst_c = (l_val * 0.02) - 273.15
             else:
-                lst_c = None
+                lst_c = None  # Data tidak valid
             
-            # Konversi NDVI: Scale 0.0001
+            # Konversi Unit NDVI: Scale 0.0001
             n_val = p.get('NDVI_RAW')
             if n_val and n_val != -9999:
                 ndvi_idx = n_val * 0.0001
+                # Clip ke range valid NDVI (-1 sampai 1)
                 ndvi_idx = max(-1, min(1, ndvi_idx))
             else:
                 ndvi_idx = None
             
-            # Hujan: mm
+            # Hujan: mm (sudah dalam satuan yang benar)
             r_val = p.get('Rain_RAW')
             if r_val is not None and r_val != -9999:
                 rain_mm = float(r_val)
@@ -299,7 +279,7 @@ def get_satellite_data_robust(df):
         df_sat = pd.DataFrame(results)
         df_final = df.merge(df_sat, left_index=True, right_on='idx').drop(columns=['idx'])
         
-        # Fill missing values dengan median
+        # Isi nilai None dengan median (untuk desa yang mungkin tertutup awan)
         if df_final['LST'].isna().any():
             df_final['LST'].fillna(df_final['LST'].median(), inplace=True)
         if df_final['NDVI'].isna().any():
@@ -315,71 +295,67 @@ def get_satellite_data_robust(df):
         st.stop()
 
 # ==============================================================================
-# 6. FUNGSI HITUNG RISIKO KEBAKARAN
+# 4. LOGIKA RISIKO FISIKA
 # ==============================================================================
 def calculate_risk(df):
-    """Hitung skor risiko kebakaran berdasarkan LST, Rain, dan NDVI"""
+    if df is None: return None
     
-    if df is None: 
-        return None
-
-    # Normalisasi variabel
+    # 1. Normalisasi Suhu (Makin panas = makin bahaya)
+    # Range 25C - 40C
     norm_lst = (df['LST'] - 25) / (40 - 25)
     norm_lst = norm_lst.clip(0, 1)
-
-    norm_rain = 1 - (df['Rain'] / 300)
+    
+    # 2. Normalisasi Hujan (Makin banyak hujan = makin aman)
+    # Hujan 30 hari: 0mm - 300mm
+    norm_rain = 1 - (df['Rain'] / 300) 
     norm_rain = norm_rain.clip(0, 1)
 
-    norm_ndvi = 1 - df['NDVI'].clip(0, 1)
+    # 3. Normalisasi Vegetasi (Makin rendah/kering = makin bahaya)
+    # NDVI range -1 sampai 1, tapi untuk vegetasi biasa 0.2 - 0.8
+    norm_dry = 1 - df['NDVI']
+    norm_dry = norm_dry.clip(0, 1)
 
-    # Hitung risk score (weighted average)
-    risk_score = (0.4 * norm_lst) + (0.4 * norm_rain) + (0.2 * norm_ndvi)
+    # RUMUS: Risk = 40% Hujan + 40% Suhu + 20% Kekeringan
+    risk_score = (0.4 * norm_rain) + (0.4 * norm_lst) + (0.2 * norm_dry)
+    
     df['prob_pct'] = (risk_score * 100).round(1)
 
-    # Klasifikasi level risiko
     def get_level(p):
-        if p > 70: 
-            return "TINGGI", [255, 0, 0]
-        elif p > 50: 
-            return "SEDANG", [255, 165, 0]
-        else: 
-            return "RENDAH", [0, 128, 0]
+        if p > 60: return "TINGGI", [255, 0, 0] # Merah
+        elif p > 50: return "SEDANG", [255, 165, 0] # Oranye
+        return "RENDAH", [0, 128, 0] # Hijau
 
     res = df['prob_pct'].apply(get_level)
     df['level'] = [x[0] for x in res]
     df['color'] = [x[1] for x in res]
-
-    # Klasifikasi status kekeringan
-    def get_dry_status(score):
-        if pd.isna(score):
-            return "DATA TIDAK ADA"
-        if score > 70: 
-            return "SANGAT KERING"
-        elif score > 50: 
-            return "KERING"
-        elif score > 30: 
-            return "NORMAL"
-        else: 
-            return "BASAH"
-
-    df['status_kekeringan'] = df['prob_pct'].apply(get_dry_status)
-
+    
+    # --- PERUBAHAN: KLASIFIKASI KEKERINGAN PAKAI HUJAN (BUKAN NDVI) ---
+    def get_dry_status(rain):
+        # Klasifikasi BMKG/Standar Umum (Bulanan)
+        if pd.isna(rain): return "DATA TIDAK ADA"
+        if rain < 10: return "SANGAT KERING"      # < 10mm (Ekstrem)
+        elif rain < 50: return "KERING"           # 10-50mm (Waspada)
+        elif rain < 100: return "NORMAL"          # 50-100mm (Normal)
+        return "BASAH"                            # > 100mm (Aman)
+    
+    df['status_kekeringan'] = df['Rain'].apply(get_dry_status)
+    
     return df
 
 # ==============================================================================
-# 7. APLIKASI UTAMA
+# 5. DASHBOARD UTAMA
 # ==============================================================================
 def main():
-    
     # --- SIDEBAR ---
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/1041/1041891.png", width=70)
         st.title("PANEL KONTROL")
         
-        if GEE_STATUS:
+        if init_ee():
             st.success("🛰️ GEE SATELIT: ONLINE")
         else:
-            st.error("❌ GEE SATELIT: OFFLINE")
+            st.error("🔌 GEE OFFLINE (Cek Token)")
+            st.warning("Jika di laptop, buka Terminal dan ketik: `earthengine authenticate`")
             st.stop()
             
         if st.button("🔄 TARIK DATA BARU"):
@@ -404,30 +380,27 @@ def main():
         - Update: **Harian** (delay 2-5 hari)
         - Resolusi: 5 km
         
-        **Klasifikasi Kekeringan:**
-        - > 70% = Sangat Kering
-        - 50-70% = Kering
-        - 30-50% = Normal
-        - < 30% = Basah
+        **Klasifikasi Kekeringan (Curah Hujan):**
+        - < 10mm = Sangat Kering
+        - 10-50mm = Kering
+        - 50-100mm = Normal
+        - > 100mm = Basah
         """)
 
-    # --- HEADER ---
     st.title("RIAU FIRE COMMAND CENTER (RFCC)")
     st.markdown("Sistem Pemantauan Kebakaran Hutan & Lahan Terintegrasi Berbasis Satelit Real-time.")
     
-    # --- LOAD DATA ---
+    # LOAD DATA
     df_base = load_data()
-    if df_base is None: 
-        st.stop()
+    if df_base is None: st.stop()
     
-    # Load satellite data (dengan caching di session state)
     if 'data_monitor' not in st.session_state:
         df_sat = get_satellite_data_robust(df_base)
         st.session_state.data_monitor = calculate_risk(df_sat)
             
-    df = st.session_state.data_monitor.copy()
+    df = st.session_state.data_monitor
     
-    # --- INFO TANGGAL DATA ---
+    # TANGGAL DATA - Tampilkan per Variabel
     st.markdown(f"""
     📅 **Tanggal Data Satelit:**
     - **Suhu (LST):** {df['LST_Date'].iloc[0]}
@@ -437,23 +410,32 @@ def main():
     📍 **Total Wilayah Dipantau:** {len(df)} Desa
     """)
 
-    # --- PETA & STATISTIK ---
+    # --- BAGIAN 1: PETA & INTERAKSI ---
     col_map, col_stat = st.columns([2, 1])
     
-    # Logika highlight desa yang dipilih dari tabel
+    # Logika Highlight (Interaksi Tabel ke Peta)
     view_state = pdk.ViewState(latitude=0.5, longitude=101.5, zoom=7.5, pitch=0)
     selected_desa_name = None
 
     if 'selection' in st.session_state and st.session_state.selection.get("selection", {}).get("rows"):
-        idx = st.session_state.selection['selection']['rows'][0]
-        if idx < len(df):
-            sel_row = df.iloc[idx]
-            selected_desa_name = sel_row['nama_desa']
-            view_state = pdk.ViewState(latitude=sel_row['lat'], longitude=sel_row['lon'], zoom=11.5, pitch=0)
+        # Kita perlu tahu baris mana yang diklik berdasarkan hasil sort terakhir
+        if 'df_sorted_display' in st.session_state:
+            idx = st.session_state.selection['selection']['rows'][0]
+            if idx < len(st.session_state.df_sorted_display):
+                sel_row = st.session_state.df_sorted_display.iloc[idx]
+                selected_desa_name = sel_row['nama_desa']
+                view_state = pdk.ViewState(latitude=sel_row['lat'], longitude=sel_row['lon'], zoom=11.5, pitch=0)
+                st.toast(f"📍 Menyorot Desa: {selected_desa_name}")
 
-    # Prepare GeoJSON
-    geojson_base = {"type": "FeatureCollection", "features": []}
-    geojson_highlight = {"type": "FeatureCollection", "features": []}
+    # PREPARE GEOJSON
+    geojson_base = {
+        "type": "FeatureCollection",
+        "features": []
+    }
+    geojson_highlight = {
+        "type": "FeatureCollection",
+        "features": []
+    }
 
     for _, row in df.iterrows():
         props = {
@@ -472,7 +454,7 @@ def main():
         if selected_desa_name and row['nama_desa'] == selected_desa_name:
             geojson_highlight["features"].append(feature)
 
-    # Layers peta
+    # LAYERS - GARIS BATAS TEBAL DAN TEGAS
     layers = []
     layers.append(pdk.Layer(
         "GeoJsonLayer",
@@ -494,7 +476,7 @@ def main():
             data=geojson_highlight,
             stroked=True,
             filled=False,
-            get_line_color=[255, 255, 0],
+            get_line_color=[255, 255, 0],  # Kuning untuk highlight
             get_line_width=500,
             line_width_min_pixels=5,
         ))
@@ -507,11 +489,11 @@ def main():
             map_style="mapbox://styles/mapbox/light-v10" 
         ))
 
-    # --- STATISTIK ---
+    # --- BAGIAN 2: ANALISIS VISUALISASI ---
     with col_stat:
         st.subheader("📊 Analisis Risiko")
         
-        # Pie Chart
+        # Pie Chart Proporsi Risiko
         risk_counts = df['level'].value_counts().reset_index()
         risk_counts.columns = ['Status', 'Jumlah']
         
@@ -529,13 +511,15 @@ def main():
         
         st.altair_chart(donut, use_container_width=True)
         
-        # Metrik
+        # Metrik Risiko Kebakaran
         high_count = len(df[df['level'] == 'TINGGI'])
         st.metric("🔥 Desa Risiko Tinggi", high_count, f"{(high_count/len(df)*100):.1f}%")
         
+        # Metrik Kekeringan
         dry_count = len(df[(df['status_kekeringan'] == 'KERING') | (df['status_kekeringan'] == 'SANGAT KERING')])
         st.metric("💧 Desa Waspada Kekeringan", dry_count, f"{(dry_count/len(df)*100):.1f}%")
         
+        # Distribusi Kekeringan
         st.markdown("**Distribusi Kekeringan:**")
         dry_dist = df['status_kekeringan'].value_counts()
         for status, count in dry_dist.items():
@@ -543,49 +527,65 @@ def main():
             emoji = "🔴" if "SANGAT" in status else "🟠" if status == "KERING" else "🟢" if status == "NORMAL" else "🔵"
             st.caption(f"{emoji} {status}: {count} desa ({pct:.1f}%)")
 
-    # --- SORTING CONTROL ---
-    st.markdown("### 🔃 Pengurutan Data Desa")
+    # ================= SORT CONTROL (FITUR BARU) =================
+    st.markdown("### 🔃 Filter & Urutan Data")
+    
+    col_sort_1, col_sort_2 = st.columns(2)
+    
+    with col_sort_1:
+        sort_by = st.selectbox(
+            "Urutkan Berdasarkan:",
+            ["Nama Desa", "Tingkat Risiko (Probabilitas)", "Curah Hujan (Rain)"]
+        )
+        
+    with col_sort_2:
+        sort_order = st.radio(
+            "Arah Urutan:",
+            ["Ascending (A-Z / Kecil-Besar)", "Descending (Z-A / Besar-Kecil)"],
+            horizontal=True
+        )
 
-    sort_mode = st.selectbox(
-        "Urutkan data berdasarkan:",
-        [
-            "Nama Desa (A → Z)",
-            "Nama Desa (Z → A)",
-            "Probability Risiko (Tertinggi → Terendah)",
-            "Probability Risiko (Terendah → Tertinggi)",
-            "Curah Hujan (Terkecil → Terbesar)",
-            "Curah Hujan (Terbesar → Terkecil)"
-        ]
-    )
+    # Logika Sorting
+    df_sorted = df.copy()
+    is_ascending = True if "Ascending" in sort_order else False
+    
+    if sort_by == "Nama Desa":
+        df_sorted = df_sorted.sort_values(by="nama_desa", ascending=is_ascending)
+    elif sort_by == "Tingkat Risiko (Probabilitas)":
+        df_sorted = df_sorted.sort_values(by="prob_pct", ascending=is_ascending)
+    elif sort_by == "Curah Hujan (Rain)":
+        df_sorted = df_sorted.sort_values(by="Rain", ascending=is_ascending)
+    
+    df_sorted = df_sorted.reset_index(drop=True)
+    
+    # Simpan state untuk highlight peta
+    st.session_state.df_sorted_display = df_sorted
 
-    # Apply sorting
-    if sort_mode == "Nama Desa (A → Z)":
-        df = df.sort_values("nama_desa")
-    elif sort_mode == "Nama Desa (Z → A)":
-        df = df.sort_values("nama_desa", ascending=False)
-    elif sort_mode == "Probability Risiko (Tertinggi → Terendah)":
-        df = df.sort_values("prob_pct", ascending=False)
-    elif sort_mode == "Probability Risiko (Terendah → Tertinggi)":
-        df = df.sort_values("prob_pct")
-    elif sort_mode == "Curah Hujan (Terkecil → Terbesar)":
-        df = df.sort_values("Rain")
-    elif sort_mode == "Curah Hujan (Terbesar → Terkecil)":
-        df = df.sort_values("Rain", ascending=False)
-
-    df = df.reset_index(drop=True)
-
-    # --- TABEL DATA ---
-    st.subheader("📂 Data Desa (Tersortir)")
+    # --- BAGIAN 3: TABEL DATA ---
+    st.subheader("📂 Data Desa")
+    
+    df_table = df_sorted[['nama_desa', 'kabupaten', 'level', 'prob_pct', 'LST', 'Rain', 'NDVI', 'status_kekeringan']]
+    
     st.dataframe(
-        df[['nama_desa', 'kabupaten', 'level', 'prob_pct', 'Rain', 'LST', 'NDVI', 'status_kekeringan']],
+        df_table,
+        column_config={
+            "nama_desa": "Nama Desa",
+            "kabupaten": "Kabupaten",
+            "level": "Status Risiko",
+            "prob_pct": st.column_config.ProgressColumn("Tingkat Risiko", format="%.1f%%", min_value=0, max_value=100),
+            "LST": st.column_config.NumberColumn("Suhu (°C)", format="%.1f"),
+            "Rain": st.column_config.NumberColumn("Hujan 30 Hari (mm)", format="%.1f"),
+            "NDVI": st.column_config.NumberColumn("NDVI", format="%.3f"),
+            "status_kekeringan": "Status Kekeringan"
+        },
         use_container_width=True,
         selection_mode="single-row",
         on_select="rerun",
         key="selection",
-        height=420
+        height=400
     )
 
-    # --- REKOMENDASI ---
+    # --- BAGIAN 4: REKOMENDASI PENCEGAHAN ---
     st.markdown("---")
     st.subheader("🛡️ REKOMENDASI TINDAKAN & MITIGASI")
     
@@ -633,8 +633,5 @@ def main():
             8. **Forum Desa:** Perkuat komunikasi antar desa untuk pencegahan dini.
             """)
 
-# ==============================================================================
-# 8. RUN APPLICATION
-# ==============================================================================
 if __name__ == "__main__":
     main()
