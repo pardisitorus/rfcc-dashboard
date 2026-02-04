@@ -1,8 +1,8 @@
 streamlit==1.26.0
 pandas==2.1.0
 numpy==1.25.0
-pydeck==0.8.1b0
+pydeck==0.8.1
 shapely==2.3.1
-earthengine-api==0.1.346
+earthengine-api==0.1.326
 altair==5.0.1
 gdown==4.7.1
