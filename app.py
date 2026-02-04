@@ -9,6 +9,30 @@ import ee
 import altair as alt
 from datetime import datetime, timedelta
 import gdown
+import os
+import ee
+from google.oauth2.credentials import Credentials
+import streamlit as st
+
+# Ambil token dari environment variable (GitHub Secrets / Streamlit Share)
+refresh_token = os.environ.get("GEE_REFRESH_TOKEN")
+client_id = os.environ.get("GEE_CLIENT_ID")
+client_secret = os.environ.get("GEE_CLIENT_SECRET")
+
+# Buat credential GEE
+creds = Credentials(
+    token=None,
+    refresh_token=refresh_token,
+    token_uri="https://oauth2.googleapis.com/token",
+    client_id=client_id,
+    client_secret=client_secret
+)
+
+# Initialize Earth Engine
+ee.Initialize(credentials=creds)
+
+st.write("✅ GEE Authentication berhasil!")
+
 
 # ==============================================================================
 # 1. KONFIGURASI SISTEM
@@ -616,4 +640,5 @@ def main():
             """)
 
 if __name__ == "__main__":
+
     main()
