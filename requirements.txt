@@ -2,8 +2,9 @@ streamlit==1.26.0
 pandas==2.1.0
 numpy==1.25.0
 pydeck==0.8.1
-shapely==2.3.1
+shapely==1.8.5.post1
 earthengine-api==0.1.326
 altair==5.0.1
 gdown==4.7.1
-
+google-api-python-client==2.95.0
+oauth2client==4.1.3
