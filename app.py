@@ -1,3 +1,8 @@
+# ============================================================
+# RIAU FIRE COMMAND CENTER (RFCC)
+# FULL VERSION — FIXED, STABLE, CLOUD READY
+# ============================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,38 +14,38 @@ import ee
 import altair as alt
 from datetime import datetime, timedelta
 import gdown
-
-import os
-import ee
 from google.oauth2.credentials import Credentials
-import streamlit as st
 
-# ======================
-# 1️⃣ Autentikasi GEE
-# ======================
-refresh_token = os.environ.get("GEE_REFRESH_TOKEN")
-client_id = os.environ.get("GEE_CLIENT_ID")
-client_secret = os.environ.get("GEE_CLIENT_SECRET")
+# ============================================================
+# 1️⃣ AUTENTIKASI GOOGLE EARTH ENGINE (WAJIB - JANGAN DIUBAH)
+# ============================================================
+def init_gee():
+    try:
+        refresh_token = st.secrets["GEE_REFRESH_TOKEN"]
 
-creds = Credentials(
-    token=None,
-    refresh_token=refresh_token,
-    token_uri="https://oauth2.googleapis.com/token",
-    client_id=client_id,
-    client_secret=client_secret
-)
+        DEFAULT_CLIENT_ID = "517222506229-vsmmajv00ul0bs7p89v5m89qs8eb9359.apps.googleusercontent.com"
+        DEFAULT_CLIENT_SECRET = "secret"
 
-ee.Initialize(credentials=creds)
-st.write("✅ GEE Authentication berhasil!")
+        creds = Credentials(
+            None,
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=DEFAULT_CLIENT_ID,
+            client_secret=DEFAULT_CLIENT_SECRET
+        )
 
-# ======================
-# 2️⃣ Ambil dataset MODIS
-# ======================
-modis = ee.ImageCollection("MODIS/006/MOD13Q1").first()
-st.write("Contoh data MODIS:")
-st.write(modis.getInfo())
+        ee.Initialize(credentials=creds)
 
+    except ee.EEException as e:
+        st.error(f"Gagal inisialisasi GEE: {e}")
+        st.stop()
+    except Exception as e:
+        st.error(f"Kesalahan autentikasi GEE: {e}")
+        st.info("Periksa GEE_REFRESH_TOKEN di Secrets")
+        st.stop()
 
+# 🔑 PANGGIL SEKALI DI AWAL
+init_gee()
 
 
 # ==============================================================================
@@ -651,4 +656,5 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
